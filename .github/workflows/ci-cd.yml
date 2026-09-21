@@ -1,0 +1,90 @@
+name: ci-cd
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: ldp21k-labs
+  REGION: us-central1
+  AR_IMAGE: us-central1-docker.pkg.dev/ldp21k-labs/petclinic/petclinic
+
+jobs:
+  security-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build & test
+        run: ./mvnw -B test
+
+      - name: SAST - SpotBugs
+        run: ./mvnw -B com.github.spotbugs:spotbugs-maven-plugin:4.8.6.0:check
+
+      - name: IaC scan - Trivy config (tfsec)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          severity: CRITICAL,HIGH
+          exit-code: 1
+
+      - name: Auth GCP (Workload Identity Federation)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: github-actions-tf@ldp21k-labs.iam.gserviceaccount.com
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Build OCI image (Buildpacks)
+        run: ./mvnw -B spring-boot:build-image
+
+      - name: Tag & push to Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+          docker tag spring-petclinic:local ${{ env.AR_IMAGE }}:${{ github.sha }}
+          docker push ${{ env.AR_IMAGE }}:${{ github.sha }}
+
+      - name: Container scan - Trivy (fail on CRITICAL/HIGH)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.AR_IMAGE }}:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          exit-code: 1
+          ignore-unfixed: true
+
+  deploy:
+    needs: security-and-build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Auth GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: github-actions-tf@ldp21k-labs.iam.gserviceaccount.com
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init & apply
+        working-directory: terraform
+        run: |
+          terraform init
+          terraform apply -auto-approve
