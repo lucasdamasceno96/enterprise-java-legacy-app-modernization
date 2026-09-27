@@ -14,6 +14,8 @@ resource "google_sql_database_instance" "petclinic" {
   }
 
   deletion_protection = true
+
+  depends_on = [google_service_networking_connection.private_vpc_connection]
 }
 
 resource "google_sql_database" "petclinic" {

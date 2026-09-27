@@ -15,7 +15,11 @@ resource "google_compute_backend_service" "petclinic" {
   load_balancing_scheme = "EXTERNAL"
   timeout_sec           = 30
 
-  security_policy = google_compute_security_policy.armor.id
+  # WAF (Cloud Armor): planejado para produção, não provisionado neste laboratório.
+  # Motivo: o projeto tem quota 0 de SECURITY_POLICIES (Cloud Armor). Quando a quota
+  # for concedida, anexar a política aqui com
+  #   security_policy = google_compute_security_policy.armor.id
+  # usando regras evaluatePreconfiguredWaf('sqli-stable' / 'xss-stable') + default allow.
 
   backend {
     group = google_compute_region_network_endpoint_group.serverless_neg.id
